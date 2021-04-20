@@ -209,6 +209,7 @@ class DistributedExecutor(object):
             'tpus',
             'tpu-vm',
             'ssh',
+            '--internal-ip',
             '{}'.format(self.tpu_name),
             '--zone {}'.format(client_worker.get_zone()),
             '--worker {}'.format(client_worker.get_hostname().split('-')[-1]),
@@ -354,7 +355,7 @@ class DistributedExecutor(object):
     for i in range(len(self._cluster.get_client_workers())):
       script_path = self.SCRIPT_PATH_TMPL.format(pid=os.getpid(), worker=i)
 
-      # ex. script = [['conda', 'activate', 'pytorch'], ['python', 'train.py']]
+      # ex. script = [['conda', 'activate', 'pytorch'], ['python3', 'train.py']]
       script = []
       script.extend(self._env_vars_cmd(i))
       # Setup environment for non-interactive non-login shell over ssh
@@ -362,9 +363,11 @@ class DistributedExecutor(object):
       if self.tpuvm_mode:
         # Start the local tf server if it is not already running.
         script.append([
-            'python', '-m', self.XRT_RUN_SERVER_CMD,
+            'python3', '-m', self.XRT_RUN_SERVER_CMD, '--port',
             str(self.tpuvm_server_port)
         ])
+        if self.restart_server:
+          script[-1].append('--restart')
       if self.docker_image:
         script.append(self._docker_run_cmd(cmd))
       else:
@@ -372,7 +375,7 @@ class DistributedExecutor(object):
           script.append(['conda', 'activate', self.conda_env])
         script.append(cmd)
 
-      # ex. script_body = 'conda activate pytorch; python train.py'
+      # ex. script_body = 'conda activate pytorch; python3 train.py'
       script_cmd_list = [concat_cmd_list(command) for command in script]
       script_body = concat_cmd_list(script_cmd_list, delimiter='; ')
       os.makedirs(os.path.dirname(script_path), exist_ok=True)
@@ -457,10 +460,6 @@ class DistributedExecutor(object):
 
     def _run_script(script_paths, client_worker):
       script_path = script_paths['remote_path']
-      if self.restart_server and self.tpuvm_mode:
-        kill_server = ('pkill -f "^python -m {} [0-9]+$"').format(
-            self.XRT_RUN_SERVER_PROCESS)
-        self._build_and_run_ssh(kill_server, client_worker, log=False)
       exit_code = self._build_and_run_ssh([script_path], client_worker)
       if exit_code != 0:
         raise RuntimeError(
@@ -557,9 +556,9 @@ class DistributedExecutor(object):
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(
       description='PyTorch on TPU distrubuted training launcher.',
-      epilog=('Usage example: python -m'
+      epilog=('Usage example: python3 -m'
               ' torch_xla.distributed.xla_dist --tpu=[TPU_NAME]'
-              ' --conda-env torch-xla-nightly -- python train.py'))
+              ' --conda-env torch-xla-nightly -- python3 train.py'))
 
   cluster_group = parser.add_argument_group('Cluster Setup')
   cluster_group.add_argument(
@@ -606,7 +605,7 @@ if __name__ == '__main__':
       help='Restart the long running XRT local service for this training.')
   parser.add_argument(
       '--tpuvm-server-port',
-      default=51001,
+      default=51011,
       type=int,
       help='Port that XRT local service will be start on.')
   parser.add_argument(
@@ -616,12 +615,6 @@ if __name__ == '__main__':
       help='The python command to launch training including model parameters.')
 
   FLAGS = parser.parse_args()
-  tpuvm_mode = False
-  accel_type = ClusterResolver.get_instance_metadata(
-      'instance/attributes/accelerator-type')
-  if re.match(r'v[0-9]+-[0-9]+', accel_type):
-    # Only TPUVM will carry the accelerator-type metadata
-    tpuvm_mode = True
 
   if (FLAGS.docker_container or FLAGS.docker_image or
       FLAGS.docker_run_flag) and FLAGS.conda_env:
@@ -629,9 +622,9 @@ if __name__ == '__main__':
                      ' arguments are mutually exclusive.')
 
   # Resolve VM and TPU clusters.
-  cluster_resolver = ClusterResolver(
-      FLAGS.tpu, vms=FLAGS.vm, tpuvm_mode=tpuvm_mode)
+  cluster_resolver = ClusterResolver(FLAGS.tpu, vms=FLAGS.vm)
   cluster = cluster_resolver.get_cluster()
+  tpuvm_mode = cluster_resolver.get_tpuvm_mode()
   executor = DistributedExecutor(
       cluster,
       docker_container=FLAGS.docker_container,

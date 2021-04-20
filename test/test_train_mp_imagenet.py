@@ -41,6 +41,9 @@ MODEL_OPTS = {
     "--lr_scheduler_divisor": {
         "type": int,
     },
+    "--test_only_at_end": {
+        "action": "store_true",
+    },
 }
 
 FLAGS = args_parse.parse_common_options(
@@ -249,7 +252,6 @@ def train_imagenet():
         )
         if FLAGS.metrics_debug:
             xm.master_print(met.metrics_report())
-
     test_utils.close_summary_writer(writer)
     xm.master_print("Max Accuracy: {:.2f}%".format(max_accuracy))
     return max_accuracy
