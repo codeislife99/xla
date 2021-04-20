@@ -1,13 +1,14 @@
 # Use nvidia/cuda:10.1-cudnn7-devel-ubuntu18.04 or later for CUDA.
 # Warning: All ARGs placed before FROM will only be scoped up unitl FROM statement.
 # https://github.com/docker/cli/blob/3c7ede6a68941f64c3a154c9a753eb7a9b1c2c3e/docs/reference/builder.md#understand-how-arg-and-from-interact
-ARG base_image="debian:stretch"
+# ARG base_image="debian:stretch"
+ARG base_image="nvidia/cuda:10.1-cudnn7-devel-ubuntu18.04"
 FROM "${base_image}"
 
 ARG python_version="3.6"
 ARG cloud_build="false"
 ARG release_version="nightly"
-ARG cuda="0"
+ARG cuda="1"
 ARG cuda_compute="7.0,7.5"
 ARG cxx_abi="0"
 ARG tpuvm=""
@@ -45,12 +46,12 @@ RUN if [ "${cloud_build}" = true ]; then github_branch="${release_version}" && \
   cd / && \
   git clone -b "${github_branch}" --recursive https://github.com/pytorch-tpu/examples tpu-examples; fi
 
-RUN cd /pytorch && bash xla/scripts/build_torch_wheels.sh ${python_version} ${release_version}
+# RUN cd /pytorch && bash xla/scripts/build_torch_wheels.sh ${python_version} ${release_version}
 
 # Use conda environment on startup or when running scripts.
-RUN echo "conda activate pytorch" >> ~/.bashrc
-RUN echo "export TF_CPP_LOG_THREAD_ID=1" >> ~/.bashrc
-ENV PATH /root/anaconda3/envs/pytorch/bin/:/root/bin:$PATH
+# RUN echo "conda activate pytorch" >> ~/.bashrc
+# RUN echo "export TF_CPP_LOG_THREAD_ID=1" >> ~/.bashrc
+# ENV PATH /root/anaconda3/envs/pytorch/bin/:/root/bin:$PATH
 
 # Define entrypoint and cmd
 COPY docker/docker-entrypoint.sh /usr/local/bin

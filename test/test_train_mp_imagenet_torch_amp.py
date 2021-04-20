@@ -55,6 +55,7 @@ FLAGS = args_parse.parse_common_options(
 )
 
 import os
+
 import schedulers
 import numpy as np
 import torch
@@ -63,17 +64,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-import torch_xla
-import torch_xla.debug.metrics as met
-import torch_xla.distributed.parallel_loader as pl
 import torch_xla.utils.utils as xu
-import torch_xla.core.xla_model as xm
-import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.test.test_utils as test_utils
-from classification_benchmark_constants import MODEL_SPECIFIC_DEFAULTS, DEFAULT_KWARGS
+import torch_xla.core.xla_model as xm
+from classification_benchmark_constants import DEFAULT_KWARGS, MODEL_SPECIFIC_DEFAULTS
+from torch.cuda.amp import GradScaler, autocast
 
-
-# Set any args that were not explicitly given by the user.
 default_value_dict = MODEL_SPECIFIC_DEFAULTS.get(FLAGS.model, DEFAULT_KWARGS)
 for arg, value in default_value_dict.items():
     if getattr(FLAGS, arg) is None:
@@ -109,19 +105,33 @@ def train_imagenet():
     img_dim = get_model_property("img_dim")
     if FLAGS.fake_data:
         train_dataset_len = 1200000  # Roughly the size of Imagenet dataset.
+        # train_loader = xu.SampleGenerator(
+        #     data=(
+        #         torch.zeros(FLAGS.batch_size, 3, img_dim, img_dim),
+        #         torch.zeros(FLAGS.batch_size, dtype=torch.int64),
+        #     ),
+        #     sample_count=train_dataset_len // FLAGS.batch_size // xm.xrt_world_size(),
+        # )
         train_loader = xu.SampleGenerator(
             data=(
                 torch.zeros(FLAGS.batch_size, 3, img_dim, img_dim),
                 torch.zeros(FLAGS.batch_size, dtype=torch.int64),
             ),
-            sample_count=train_dataset_len // FLAGS.batch_size // xm.xrt_world_size(),
+            sample_count=train_dataset_len // FLAGS.batch_size,
         )
+        # test_loader = xu.SampleGenerator(
+        #     data=(
+        #         torch.zeros(FLAGS.test_set_batch_size, 3, img_dim, img_dim),
+        #         torch.zeros(FLAGS.test_set_batch_size, dtype=torch.int64),
+        #     ),
+        #     sample_count=50000 // FLAGS.batch_size // xm.xrt_world_size(),
+        # )
         test_loader = xu.SampleGenerator(
             data=(
                 torch.zeros(FLAGS.test_set_batch_size, 3, img_dim, img_dim),
                 torch.zeros(FLAGS.test_set_batch_size, dtype=torch.int64),
             ),
-            sample_count=50000 // FLAGS.batch_size // xm.xrt_world_size(),
+            sample_count=50000 // FLAGS.batch_size,
         )
     else:
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -154,13 +164,13 @@ def train_imagenet():
         )
 
         train_sampler, test_sampler = None, None
-        if xm.xrt_world_size() > 1:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(
-                train_dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal(), shuffle=True
-            )
-            test_sampler = torch.utils.data.distributed.DistributedSampler(
-                test_dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal(), shuffle=False
-            )
+        # if xm.xrt_world_size() > 1:
+        #     train_sampler = torch.utils.data.distributed.DistributedSampler(
+        #         train_dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal(), shuffle=True
+        #     )
+        #     test_sampler = torch.utils.data.distributed.DistributedSampler(
+        #         test_dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal(), shuffle=False
+        #     )
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=FLAGS.batch_size,
@@ -180,15 +190,17 @@ def train_imagenet():
 
     torch.manual_seed(42)
 
-    device = xm.xla_device()
+    # device = xm.xla_device()
+    device = torch.device("cuda")  # Default CUDA device
     model = get_model_property("model_fn")().to(device)
     writer = None
-    if xm.is_master_ordinal():
-        writer = test_utils.get_summary_writer(FLAGS.logdir)
+    # if xm.is_master_ordinal():
+    #     writer = test_utils.get_summary_writer(FLAGS.logdir)
     optimizer = optim.SGD(
         model.parameters(), lr=FLAGS.lr, momentum=FLAGS.momentum, weight_decay=1e-4
     )
-    num_training_steps_per_epoch = train_dataset_len // (FLAGS.batch_size * xm.xrt_world_size())
+    # num_training_steps_per_epoch = train_dataset_len // (FLAGS.batch_size * xm.xrt_world_size())
+    num_training_steps_per_epoch = train_dataset_len // (FLAGS.batch_size * 1)
     lr_scheduler = schedulers.wrap_optimizer_with_scheduler(
         optimizer,
         scheduler_type=getattr(FLAGS, "lr_scheduler_type", None),
@@ -198,16 +210,24 @@ def train_imagenet():
         summary_writer=writer,
     )
     loss_fn = nn.CrossEntropyLoss()
+    scaler = GradScaler()
 
     def train_loop_fn(loader, epoch):
         tracker = xm.RateTracker()
         model.train()
         for step, (data, target) in enumerate(loader):
+            data = data.to(device)
+            target = target.to(device)
             optimizer.zero_grad()
-            output = model(data)
-            loss = loss_fn(output, target)
-            loss.backward()
-            xm.optimizer_step(optimizer)
+            with autocast():
+                output = model(data)
+                loss = loss_fn(output, target)
+
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            # optimizer.step()
+            # xm.optimizer_step(optimizer)
             tracker.add(FLAGS.batch_size)
             if lr_scheduler:
                 lr_scheduler.step()
@@ -229,29 +249,27 @@ def train_imagenet():
                 test_utils.print_test_update(device, None, epoch, step)
                 # xm.add_step_closure(test_utils.print_test_update, args=(device, None, epoch, step))
         accuracy = 100.0 * correct.item() / total_samples
-        accuracy = xm.mesh_reduce("test_accuracy", accuracy, np.mean)
+        # accuracy = xm.mesh_reduce("test_accuracy", accuracy, np.mean)
         return accuracy
 
-    train_device_loader = pl.MpDeviceLoader(train_loader, device)
-    test_device_loader = pl.MpDeviceLoader(test_loader, device)
+    # train_device_loader = pl.MpDeviceLoader(train_loader, device)
+    # test_device_loader = pl.MpDeviceLoader(test_loader, device)
     accuracy, max_accuracy = 0.0, 0.0
     for epoch in range(1, FLAGS.num_epochs + 1):
-        xm.master_print("Epoch {} train begin {}".format(epoch, test_utils.now()))
-        train_loop_fn(train_device_loader, epoch)
-        xm.master_print("Epoch {} train end {}".format(epoch, test_utils.now()))
-        accuracy = test_loop_fn(test_device_loader, epoch)
-        xm.master_print(
-            "Epoch {} test end {}, Accuracy={:.2f}".format(epoch, test_utils.now(), accuracy)
-        )
+        print("Epoch {} train begin {}".format(epoch, test_utils.now()))
+        train_loop_fn(train_loader, epoch)
+        print("Epoch {} train end {}".format(epoch, test_utils.now()))
+        accuracy = test_loop_fn(test_loader, epoch)
+        print("Epoch {} test end {}, Accuracy={:.2f}".format(epoch, test_utils.now(), accuracy))
         max_accuracy = max(accuracy, max_accuracy)
         test_utils.write_to_summary(
             writer, epoch, dict_to_write={"Accuracy/test": accuracy}, write_xla_metrics=True
         )
-        if FLAGS.metrics_debug:
-            xm.master_print(met.metrics_report())
+        # if FLAGS.metrics_debug:
+        #     print(met.metrics_report())
 
     test_utils.close_summary_writer(writer)
-    xm.master_print("Max Accuracy: {:.2f}%".format(max_accuracy))
+    print("Max Accuracy: {:.2f}%".format(max_accuracy))
     return max_accuracy
 
 
