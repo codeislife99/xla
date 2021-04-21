@@ -1,4 +1,4 @@
-import args_parse
+import test.args_parse as args_parse
 
 SUPPORTED_MODELS = [
     "alexnet",
@@ -56,7 +56,7 @@ FLAGS = args_parse.parse_common_options(
 
 import os
 
-import schedulers
+import test.schedulers as schedulers
 import numpy as np
 import torch
 import torch.nn as nn
@@ -67,7 +67,7 @@ import torchvision.transforms as transforms
 import torch_xla.utils.utils as xu
 import torch_xla.test.test_utils as test_utils
 import torch_xla.core.xla_model as xm
-from classification_benchmark_constants import DEFAULT_KWARGS, MODEL_SPECIFIC_DEFAULTS
+from test.classification_benchmark_constants import DEFAULT_KWARGS, MODEL_SPECIFIC_DEFAULTS
 from torch.cuda.amp import GradScaler, autocast
 
 default_value_dict = MODEL_SPECIFIC_DEFAULTS.get(FLAGS.model, DEFAULT_KWARGS)
