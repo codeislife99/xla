@@ -219,10 +219,10 @@ def train_imagenet():
             if lr_scheduler:
                 lr_scheduler.step()
             if step % FLAGS.log_steps == 0:
-                _train_update(device, step, loss, tracker, epoch, writer)
-                # xm.add_step_closure(
-                #     _train_update, args=(device, step, loss, tracker, epoch, writer)
-                # )
+                # _train_update(device, step, loss, tracker, epoch, writer)
+                xm.add_step_closure(
+                    _train_update, args=(device, step, loss, tracker, epoch, writer)
+                )
 
     def test_loop_fn(loader, epoch):
         total_samples, correct = 0, 0
@@ -262,7 +262,7 @@ def train_imagenet():
     return max_accuracy
 
 
-def _mp_fn(flags):
+def _mp_fn(index, flags):
     global FLAGS
     FLAGS = flags
     torch.set_default_tensor_type("torch.FloatTensor")
@@ -273,5 +273,5 @@ def _mp_fn(flags):
 
 
 if __name__ == "__main__":
-    _mp_fn(FLAGS)
-    # xmp.spawn(_mp_fn, args=(FLAGS,), nprocs=FLAGS.num_cores)
+    # _mp_fn(FLAGS)
+    xmp.spawn(_mp_fn, args=(FLAGS,), nprocs=FLAGS.num_cores)
