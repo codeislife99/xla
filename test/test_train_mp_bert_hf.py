@@ -1,7 +1,7 @@
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from transformers import DistilBertTokenizerFast, BertTokenizer
-from transformers import DistilBertForSequenceClassification, BertForSequenceClassification, Trainer, TrainingArguments, AdamW
+from transformers import DistilBertForSequenceClassification, BertForSequenceClassification, AdamW
 import torch
 import torch_xla.core.xla_model as xm
 from torch.utils.data import DataLoader
@@ -31,7 +31,7 @@ class IMDbDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.labels)
 
-def train_bert(model_name, amp_enabled, dataset_path, num_examples=500):
+def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=500):
     if model_name == "bert-base-uncased":
         tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         model = BertForSequenceClassification.from_pretrained("bert-base-uncased")
@@ -57,7 +57,10 @@ def train_bert(model_name, amp_enabled, dataset_path, num_examples=500):
     val_dataset = IMDbDataset(val_encodings, val_labels)
     test_dataset = IMDbDataset(test_encodings, test_labels)
 
-    device = xm.xla_device()
+    if xla_enabled:
+        device = xm.xla_device()
+    else:
+        device = torch.device("cuda")
     model.to(device)
     model.train()
 
@@ -74,13 +77,17 @@ def train_bert(model_name, amp_enabled, dataset_path, num_examples=500):
             outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
             loss = outputs[0]
             loss.backward()
-            xm.optimizer_step(optim)
-            # optim.step()
+            if xla_enabled:
+                xm.optimizer_step(optim)
+            else:
+                optim.step()
 
     model.eval()
 
 if __name__ == "__main__":
     dataset_path = "/pytorch/xla/test/aclImdb/"
+    # dataset_path = "test/aclImdb/"
     model_name = "bert-base-uncased"
     amp_enabled = False
-    train_bert(model_name, amp_enabled, dataset_path)
+    xla_enabled = True
+    train_bert(model_name, amp_enabled, xla_enabled, dataset_path)
