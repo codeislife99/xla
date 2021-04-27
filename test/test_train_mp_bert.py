@@ -21,6 +21,7 @@ import torch.nn.functional as F
 import pandas as pd 
 import torch_xla.test.test_utils as test_utils
 import torch_xla.core.xla_model as xm
+import torch_xla.distributed.xla_multiprocessing as xmp
 
 def _train_update(device, step, loss, tracker, epoch, writer):
     test_utils.print_training_update(
@@ -178,9 +179,16 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
         time_elapsed = time.time() - epoch_time
         print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')
 
+def _mp_fn(index):
+    torch.set_default_tensor_type("torch.FloatTensor")
+    train_bert(dataset_path, xla_enabled, amp_enabled)
+
 if __name__ == "__main__":
     dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
     # dataset_path = "test/IMDB Dataset.csv"
     xla_enabled = True
-    amp_enabled = True 
-    train_bert(dataset_path, xla_enabled, amp_enabled)
+    amp_enabled = False
+    if xla_enabled:
+        xmp.spawn(_mp_fn, nprocs=1)
+    else: 
+        train_bert(dataset_path, xla_enabled, amp_enabled)
