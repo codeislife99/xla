@@ -6,6 +6,20 @@ import torch
 import torch_xla.core.xla_model as xm
 from torch.utils.data import DataLoader
 import os
+from torch.cuda.amp import autocast, GradScaler
+import torch_xla.test.test_utils as test_utils
+
+
+def _train_update(device, step, loss, tracker, epoch, writer):
+    test_utils.print_training_update(
+        device,
+        step,
+        loss.item(),
+        tracker.rate(),
+        tracker.global_rate(),
+        epoch,
+        summary_writer=writer,
+    )
 
 def read_imdb_split(split_dir):
     split_dir = Path(split_dir)
@@ -30,6 +44,36 @@ class IMDbDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.labels)
+
+def loop_with_amp(model, input_ids, attention_mask, labels, optim, xla_enabled, scaler):
+    with autocast():
+        outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+        loss = outputs[0]
+    
+    if xla_enabled:
+        scaler.scale(loss).backward()
+        gradients = xm._fetch_gradients(optim)
+        xm.all_reduce("sum", gradients, scale=1.0 / xm.xrt_world_size())
+        scaler.step(optim)
+        scaler.update()
+        xm.mark_step()
+    else:
+        scaler.scale(loss).backward()
+        scaler.step(optim)
+        scaler.update()
+
+    return loss, optim
+
+def loop_without_amp(model, input_ids, attention_mask, labels, optim, xla_enabled):
+    outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+    loss = outputs[0]
+    loss.backward()
+    if xla_enabled:
+        xm.optimizer_step(optim)
+    else:
+        optim.step()
+
+    return loss, optim
 
 def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=500):
     if model_name == "bert-base-uncased":
@@ -68,26 +112,29 @@ def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=
 
     optim = AdamW(model.parameters(), lr=5e-5)
 
+    if amp_enabled: 
+        scaler = GradScaler()
+    
+    tracker = xm.RateTracker()
     for epoch in range(3):
-        for batch in train_loader:
+        for step, batch in enumerate(train_loader):
             optim.zero_grad()
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
-            outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs[0]
-            loss.backward()
-            if xla_enabled:
-                xm.optimizer_step(optim)
+            if amp_enabled:
+                loss, optim = loop_with_amp(model, input_ids, attention_mask, labels, optim, xla_enabled, scaler)
             else:
-                optim.step()
+                loss, optim = loop_without_amp(model, input_ids, attention_mask, labels, optim, xla_enabled)
+            tracker.add(input_ids.shape[0])
+            _train_update(device, step, loss, tracker, epoch, None)
 
     model.eval()
 
 if __name__ == "__main__":
     dataset_path = "/pytorch/xla/test/aclImdb/"
-    # dataset_path = "test/aclImdb/"
+    dataset_path = "test/aclImdb/"
     model_name = "bert-base-uncased"
     amp_enabled = False
-    xla_enabled = True
+    xla_enabled = False  # Select False to enable torch cuda
     train_bert(model_name, amp_enabled, xla_enabled, dataset_path)
