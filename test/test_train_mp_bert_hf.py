@@ -6,7 +6,6 @@ import torch
 import torch_xla.core.xla_model as xm
 from torch.utils.data import DataLoader
 import os
-from torch.cuda.amp import autocast, GradScaler
 import torch_xla.test.test_utils as test_utils
 
 
@@ -45,7 +44,15 @@ class IMDbDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.labels)
 
-def loop_with_amp(model, input_ids, attention_mask, labels, optim, xla_enabled, scaler):
+def get_autocast_and_scaler(xla_enabled): 
+    if xla_enabled: 
+        from torch_xla.amp import autocast, GradScaler
+        return autocast, GradScaler()
+    
+    from torch.cuda.amp import autocast, GradScaler
+    return autocast, GradScaler()
+
+def loop_with_amp(model, input_ids, attention_mask, labels, optim, xla_enabled, autocast, scaler):
     with autocast():
         outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
         loss = outputs[0]
@@ -75,7 +82,7 @@ def loop_without_amp(model, input_ids, attention_mask, labels, optim, xla_enable
 
     return loss, optim
 
-def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=500):
+def generate_tokenizer_and_model(model_name): 
     if model_name == "bert-base-uncased":
         tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         model = BertForSequenceClassification.from_pretrained("bert-base-uncased")
@@ -83,6 +90,10 @@ def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=
         tokenizer = DistilBertTokenizerFast.from_pretrained('distilbert-base-uncased')
         model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased")
 
+    return tokenizer, model
+
+def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=500):
+    tokenizer, model = generate_tokenizer_and_model(model_name)
 
     train_texts, train_labels = read_imdb_split(os.path.join(dataset_path, 'train'))
     test_texts, test_labels = read_imdb_split(os.path.join(dataset_path,'test'))
@@ -113,7 +124,7 @@ def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=
     optim = AdamW(model.parameters(), lr=5e-5)
 
     if amp_enabled: 
-        scaler = GradScaler()
+        autocast, scaler = get_autocast_and_scaler(xla_enabled)
     
     tracker = xm.RateTracker()
     for epoch in range(3):
@@ -123,7 +134,7 @@ def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
             if amp_enabled:
-                loss, optim = loop_with_amp(model, input_ids, attention_mask, labels, optim, xla_enabled, scaler)
+                loss, optim = loop_with_amp(model, input_ids, attention_mask, labels, optim, xla_enabled, autocast, scaler)
             else:
                 loss, optim = loop_without_amp(model, input_ids, attention_mask, labels, optim, xla_enabled)
             tracker.add(input_ids.shape[0])
@@ -131,8 +142,8 @@ def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=
 
 if __name__ == "__main__":
     dataset_path = "/pytorch/xla/test/aclImdb/"
-    dataset_path = "test/aclImdb/"
+    # dataset_path = "test/aclImdb/"
     model_name = "bert-base-uncased"
-    amp_enabled = False
-    xla_enabled = False  # Select False to enable torch cuda
+    amp_enabled = True
+    xla_enabled = True  # Select False to enable torch cuda
     train_bert(model_name, amp_enabled, xla_enabled, dataset_path)
