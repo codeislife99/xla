@@ -129,8 +129,6 @@ def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=
             tracker.add(input_ids.shape[0])
             _train_update(device, step, loss, tracker, epoch, None)
 
-    model.eval()
-
 if __name__ == "__main__":
     dataset_path = "/pytorch/xla/test/aclImdb/"
     dataset_path = "test/aclImdb/"
