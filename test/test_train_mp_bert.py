@@ -22,6 +22,8 @@ import pandas as pd
 import torch_xla.test.test_utils as test_utils
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.distributed.parallel_loader as pl
+
 
 def _train_update(device, step, loss, tracker, epoch, writer):
     test_utils.print_training_update(
@@ -55,23 +57,45 @@ class text_dataset(Dataset):
         self.max_seq_length = max_seq_length
         self.tokenizer = tokenizer
 
-    def __getitem__(self,index):
+        self.ids_review_list = [] 
+        self.list_of_labels = []
+        # for index in range(len(self.x_y_list[0])):
+        self.reduced_size = 1000
+        for index in range(self.reduced_size):
+            tokenized_review = self.tokenizer.tokenize(self.x_y_list[0][index])
         
-        tokenized_review = self.tokenizer.tokenize(self.x_y_list[0][index])
-        if len(tokenized_review) > self.max_seq_length:
-            tokenized_review = tokenized_review[:self.max_seq_length]
+            if len(tokenized_review) > self.max_seq_length:
+                tokenized_review = tokenized_review[:self.max_seq_length]
+            ids_review  = self.tokenizer.convert_tokens_to_ids(tokenized_review)
+            padding = [0] * (self.max_seq_length - len(ids_review))
+            ids_review += padding
+            assert len(ids_review) == self.max_seq_length
+            ids_review = torch.tensor(ids_review)
+            sentiment = self.x_y_list[1][index] # color        
+            list_of_labels = [torch.from_numpy(np.array(sentiment))]
+            # return ids_review, list_of_labels[0]      
+            self.ids_review_list.append(ids_review)
+            # import pdb;pdb.set_trace()
+            self.list_of_labels.append(torch.max(list_of_labels[0],0)[1])
+              
+    def __getitem__(self,index):
+        return self.ids_review_list[index], self.list_of_labels[index]        
+        # tokenized_review = self.tokenizer.tokenize(self.x_y_list[0][index])
+        # if len(tokenized_review) > self.max_seq_length:
+        #     tokenized_review = tokenized_review[:self.max_seq_length]
             
-        ids_review  = self.tokenizer.convert_tokens_to_ids(tokenized_review)
-        padding = [0] * (self.max_seq_length - len(ids_review))
-        ids_review += padding
-        assert len(ids_review) == self.max_seq_length
-        ids_review = torch.tensor(ids_review)
-        sentiment = self.x_y_list[1][index] # color        
-        list_of_labels = [torch.from_numpy(np.array(sentiment))]
-        return ids_review, list_of_labels[0]
+        # ids_review  = self.tokenizer.convert_tokens_to_ids(tokenized_review)
+        # padding = [0] * (self.max_seq_length - len(ids_review))
+        # ids_review += padding
+        # assert len(ids_review) == self.max_seq_length
+        # ids_review = torch.tensor(ids_review)
+        # sentiment = self.x_y_list[1][index] # color        
+        # list_of_labels = [torch.from_numpy(np.array(sentiment))]
+        # return ids_review, list_of_labels[0]
     
     def __len__(self):
-        return len(self.x_y_list[0])
+        # return len(self.x_y_list[0])
+        return self.reduced_size
 
 def get_autocast_and_scaler(xla_enabled): 
     if xla_enabled: 
@@ -157,6 +181,8 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
     if amp_enabled:
         autocast, scaler = get_autocast_and_scaler(xla_enabled)
 
+    train_device_loader = pl.MpDeviceLoader(dataloaders_dict['train'], device)
+
     for epoch in range(num_epochs):
         epoch_time = time.time()
         tracker = xm.RateTracker()
@@ -164,10 +190,11 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
         print('-' * 10)
         model.train()  # Set model to training mode          
         # Iterate over data.
-        for step, (inputs, sentiment) in enumerate(dataloaders_dict['train']):
-            sentiment = torch.max(sentiment.float(), 1)[1]
-            inputs = inputs.to(device) 
-            sentiment = sentiment.to(device)
+        for step, (inputs, sentiment) in enumerate(train_device_loader):
+            # import pdb;pdb.set_trace()
+            # sentiment = torch.max(sentiment.float(), 1)[1]
+            # inputs = inputs.to(device) 
+            # sentiment = sentiment.to(device)
             optimizer.zero_grad()
             if amp_enabled:
                 loss, optimizer = loop_with_amp(model, inputs, sentiment, optimizer, xla_enabled, autocast, scaler)
