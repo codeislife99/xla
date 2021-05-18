@@ -12,6 +12,8 @@ ARG cuda_compute="7.0,7.5"
 ARG cxx_abi="0"
 ARG tpuvm=""
 
+ARG torch_commit_id="99f5ffee1a5455140c611fd96a17bcae5e51c7e9"
+ARG torchvision_commit_id="90a6206c5ca2ab26190cb89c2e42d95e0ece8c90"
 RUN apt-get update
 RUN apt-get install -y git sudo python-pip python3-pip
 RUN git clone https://github.com/pytorch/pytorch
@@ -45,7 +47,7 @@ RUN if [ "${cloud_build}" = true ]; then github_branch="${release_version}" && \
   cd / && \
   git clone -b "${github_branch}" --recursive https://github.com/pytorch-tpu/examples tpu-examples; fi
 
-RUN cd /pytorch && bash xla/scripts/build_torch_wheels.sh ${python_version} ${release_version}
+RUN cd /pytorch && bash xla/scripts/build_torch_wheels.sh ${python_version} ${release_version} ${torch_commit_id} ${torchvision_commit_id}
 
 # Use conda environment on startup or when running scripts.
 RUN echo "conda activate pytorch" >> ~/.bashrc

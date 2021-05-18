@@ -5,6 +5,8 @@ set -x  # Display commands being run.
 
 PYTHON_VERSION=$1
 RELEASE_VERSION=$2  # rX.Y or nightly
+TORCH_COMMIT_ID=$3
+TORCHVISION_COMMIT_ID=$4
 DEFAULT_PYTHON_VERSION=3.6
 DEBIAN_FRONTEND=noninteractive
 
@@ -176,10 +178,11 @@ function install_and_setup_conda() {
 
 function build_and_install_torch() {
   # Checkout the PT commit ID or branch if we have one.
-  COMMITID_FILE="xla/.torch_pin"
-  if [ -e "$COMMITID_FILE" ]; then
-    git checkout $(cat "$COMMITID_FILE")
-  fi
+  # COMMITID_FILE="xla/.torch_pin"
+  # if [ -e "$COMMITID_FILE" ]; then
+  #   git checkout $(cat "$COMMITID_FILE")
+  # fi
+  git checkout ${TORCH_COMMIT_ID}
   # Only checkout dependencies once PT commit/branch checked out.
   git submodule update --init --recursive
   # Apply patches to PT which are required by the XLA support.
@@ -200,10 +203,11 @@ function build_and_install_torch_xla() {
 }
 
 function install_torchvision_from_source() {
-  torchvision_repo_version="master"
+  # torchvision_repo_version="master"
   # Cannot install torchvision package with PyTorch installation from source.
   # https://github.com/pytorch/vision/issues/967
-  git clone -b "${torchvision_repo_version}" https://github.com/pytorch/vision.git
+  git clone -b https://github.com/pytorch/vision.git
+  git checkout "${TORCHVISION_COMMIT_ID}"
   pushd vision
   python setup.py bdist_wheel
   pip install dist/*.whl
