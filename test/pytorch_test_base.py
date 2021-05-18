@@ -185,7 +185,6 @@ DISABLED_TORCH_TESTS_ANY = {
         'test_maximum_minimum_type_promotion_xla_.*bfloat16.*',  # doesn't raise
         'test_index_add_mem_overlap',  # doesn't raise
         'test_shift_mem_overlap',  # doesn't raise
-        'test_matrix_exp_analytic_xla',  # server side crash
         'test_muldiv_scalar_xla_bfloat16',  # FIXME
         'test_random_from_to_bool',  # doesn't raise
         'test_random_from_to_xla',  # doesn't raise
@@ -318,6 +317,21 @@ DISABLED_TORCH_TESTS_TPU_ONLY = {
         'test_bucketization_xla',  # server side crash
         'test_median_real_values_xla_int64',  # TPU X64Rewriter doesn't support sort
         'test_copysign_xla.*bfloat16.*',  # precision
+        'test_nondeterministic_alert_bincount_xla',  # server side crash
+        'test_nondeterministic_alert_histc_xla',  # server side crash
+        'test_nondeterministic_alert_grid_sample_2d_xla',  # server side crash
+        'test_nondeterministic_alert_grid_sample_3d_xla',  # server side crash
+        'test_nondeterministic_alert_index_add_xla',  # server side crash
+        'test_put_xla_bfloat16',  # (TPU) 0.46484375 vs. 0.484375
+        'test_take_xla_bfloat16',  # (TPU) -6.53125 vs. -6.5625
+        'test_multinomial_constraints',  # server side crash
+        'test_multinomial_invalid_distribution',  # server side crash
+        'test_softplus_low_threshold_xla',  # server side crash
+        'test_put_xla_float64',  # slow on TPU (~16 min)
+        'test_put_xla_int16',  # slow on TPU (~13 min)
+        'test_put_xla_int32',  # slow on TPU (~22 min)
+        'test_put_xla_int64',  # slow on TPU (~15 min)
+        'test_put_xla_int8',  # slow on TPU (~15 min)
     },
 
     # test_indexing.py
@@ -329,6 +343,8 @@ DISABLED_TORCH_TESTS_TPU_ONLY = {
     'TestNNDeviceTypeXLA': {
         'test_embedding_bag_empty_input_xla',  # server side crash
         'test_EmbeddingBag_empty_per_sample_weights_and_offsets_xla',  # server side crash
+        'test_softplus_low_threshold',  # grad check failure
+        'test_Dropout',  # too slow
     },
 
     # test_type_promotion.py

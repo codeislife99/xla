@@ -11,6 +11,7 @@
 #include "tensorflow/compiler/xla/xla_client/util.h"
 #include "tensorflow/compiler/xla/xla_client/xla_util.h"
 #include "torch/csrc/autograd/variable.h"
+#include "torch_xla/csrc/aten_xla_bridge.h"
 #include "torch_xla/csrc/data_ops.h"
 #include "torch_xla/csrc/helpers.h"
 #include "torch_xla/csrc/ir_util.h"
@@ -141,6 +142,14 @@ struct MinMaxValues {
   ir::Value min;
   ir::Value max;
 };
+
+ir::Value MaybeExpand(const ir::Value& input, const xla::Shape& target_shape) {
+  if (input.shape().dimensions() == target_shape.dimensions()) {
+    return input;
+  }
+  return ir::MakeNode<ir::ops::Expand>(
+      input, xla::util::ToVector<xla::int64>(target_shape.dimensions()));
+}
 
 MinMaxValues GetMinMaxValues(const XLATensor& tensor,
                              const c10::optional<at::Scalar>& min,
@@ -280,14 +289,6 @@ absl::optional<ir::Value> GetOptionalIrValue(const XLATensor& tensor) {
     value = tensor.GetIrValue();
   }
   return value;
-}
-
-ir::Value MaybeExpand(const ir::Value& input, const xla::Shape& target_shape) {
-  if (input.shape().dimensions() == target_shape.dimensions()) {
-    return input;
-  }
-  return ir::MakeNode<ir::ops::Expand>(
-      input, xla::util::ToVector<xla::int64>(target_shape.dimensions()));
 }
 
 void CheckIsIntegralOrPred(const xla::Shape& shape,
@@ -483,18 +484,18 @@ void XLATensor::_amp_foreach_non_finite_check_and_unscale_(
   found_inf.SetInPlaceIrValue(ir::Value(node, self.size()));
 }
 
-XLATensor XLATensor::_amp_update_scale(XLATensor growth_tracker,
-                                       const XLATensor& current_scale,
-                                       const XLATensor& found_inf,
-                                       double scale_growth_factor,
-                                       double scale_backoff_factor,
-                                       int growth_interval) {
+void XLATensor::_amp_update_scale_(XLATensor& current_scale,
+                                   XLATensor& growth_tracker,
+                                   const XLATensor& found_inf,
+                                   double scale_growth_factor,
+                                   double scale_backoff_factor,
+                                   int growth_interval) {
   ir::NodePtr node = ir::MakeNode<ir::ops::AmpUpdateScale>(
       growth_tracker.GetIrValue(), current_scale.GetIrValue(),
       found_inf.GetIrValue(), scale_growth_factor, scale_backoff_factor,
       growth_interval);
-  growth_tracker.SetInPlaceIrValue(ir::Value(node, 0));
-  return current_scale.CreateFrom(ir::Value(node, 1));
+  growth_tracker.SetInPlaceIrValue(ir::Value(node, 1));
+  current_scale.SetInPlaceIrValue(ir::Value(node, 0));
 }
 
 XLATensor XLATensor::abs(const XLATensor& input) {
@@ -942,11 +943,41 @@ XLATensor XLATensor::clamp(const XLATensor& input,
       ir::ops::Clamp(input.GetIrValue(), min_max.min, min_max.max));
 }
 
+XLATensor XLATensor::clamp(const XLATensor& input,
+                           const c10::optional<at::Tensor>& min,
+                           const c10::optional<at::Tensor>& max) {
+  XLA_CHECK(min || max)
+      << "At least one of \'min\' or \'max\' must not be None";
+  ir::Value res = input.GetIrValue();
+  if (min) {
+    res = ir::ops::Max(res, bridge::GetXlaTensor(*min).GetIrValue());
+  }
+  if (max) {
+    res = ir::ops::Min(res, bridge::GetXlaTensor(*max).GetIrValue());
+  }
+  return input.CreateFrom(res);
+}
+
 void XLATensor::clamp_(XLATensor& input, const c10::optional<at::Scalar>& min,
                        const c10::optional<at::Scalar>& max) {
   MinMaxValues min_max = GetMinMaxValues(input, min, max);
   input.SetInPlaceIrValue(
       ir::ops::Clamp(input.GetIrValue(), min_max.min, min_max.max));
+}
+
+void XLATensor::clamp_out(XLATensor& out, const XLATensor& input,
+                          const c10::optional<at::Tensor>& min,
+                          const c10::optional<at::Tensor>& max) {
+  XLA_CHECK(min || max)
+      << "At least one of \'min\' or \'max\' must not be None";
+  ir::Value res = input.GetIrValue();
+  if (min) {
+    res = ir::ops::Max(res, bridge::GetXlaTensor(*min).GetIrValue());
+  }
+  if (max) {
+    res = ir::ops::Min(res, bridge::GetXlaTensor(*max).GetIrValue());
+  }
+  out.SetInPlaceIrValue(res);
 }
 
 XLATensor XLATensor::clone(const XLATensor& input) {
@@ -1089,6 +1120,8 @@ XLATensor XLATensor::div(const XLATensor& input, const XLATensor& other,
   } else if (!input_is_float && other_is_float) {
     scalar_type = TensorTypeFromXlaType(other_type);
   }
+  // We need to cast both input and other to float to perform true divide, floor
+  // divide and trunc divide.
   ir::Value input_value = GetFloatingIrValue(input, scalar_type);
   ir::Value other_value = GetFloatingIrValue(other, scalar_type);
   ir::Value res = input_value / other_value;
@@ -1107,10 +1140,19 @@ XLATensor XLATensor::div(const XLATensor& input, const XLATensor& other,
   // Promote the result to the logical_element_type if one of the
   // input and the other is float. If that is not the case logical_element_type
   // will be non-floating-point type, we should only promote the result to that
-  // when rounding_mode is not nullopt
+  // when rounding_mode is not nullopt.
   if (input_is_float || other_is_float || rounding_mode.has_value()) {
+    if (logical_element_type.has_value()) {
+      xla::PrimitiveType res_intended_type =
+          MakeXlaPrimitiveType(*logical_element_type, &input.GetDevice());
+      if (res.shape().element_type() != res_intended_type) {
+        res = ir::MakeNode<ir::ops::Cast>(res, res_intended_type);
+      }
+    }
     return input.CreateFrom(res, logical_element_type);
   } else {
+    // We don't need to typecheck the res IR here since we cast both input and
+    // output to the scalar_type. Res type must also be scalar_type here.
     return input.CreateFrom(res, scalar_type);
   }
 }
@@ -2619,12 +2661,12 @@ XLATensor XLATensor::stack(absl::Span<const XLATensor> tensors,
 
 XLATensor XLATensor::std(const XLATensor& input,
                          std::vector<xla::int64> dimensions,
-                         bool keep_reduced_dimensions, bool unbiased) {
+                         bool keep_reduced_dimensions, xla::int64 correction) {
   return input.CreateFrom(
       ir::MakeNode<ir::ops::Std>(input.GetIrValue(),
                                  XlaHelpers::GetCanonicalDimensionIndices(
                                      dimensions, input.shape().get().rank()),
-                                 keep_reduced_dimensions, unbiased));
+                                 keep_reduced_dimensions, correction));
 }
 
 XLATensor XLATensor::sub(const XLATensor& input, const XLATensor& other,
@@ -2916,13 +2958,13 @@ XLATensor XLATensor::view(const XLATensor& input,
 }
 
 XLATensor XLATensor::var(const XLATensor& input,
-                         std::vector<xla::int64> dimensions, bool unbiased,
-                         bool keep_reduced_dimensions) {
+                         std::vector<xla::int64> dimensions,
+                         xla::int64 correction, bool keep_reduced_dimensions) {
   return input.CreateFrom(
       ir::MakeNode<ir::ops::Var>(input.GetIrValue(),
                                  XlaHelpers::GetCanonicalDimensionIndices(
                                      dimensions, input.shape().get().rank()),
-                                 unbiased, keep_reduced_dimensions));
+                                 correction, keep_reduced_dimensions));
 }
 
 void XLATensor::zero_(XLATensor& input) {

@@ -251,12 +251,12 @@ class XLATensor {
       std::vector<XLATensor> self, XLATensor& found_inf,
       const XLATensor& inv_scale);
 
-  static XLATensor _amp_update_scale(XLATensor growth_tracker,
-                                     const XLATensor& current_scale,
-                                     const XLATensor& found_inf,
-                                     double scale_growth_factor,
-                                     double scale_backoff_factor,
-                                     int growth_interval);
+  static void _amp_update_scale_(XLATensor& current_scale,
+                                 XLATensor& growth_tracker,
+                                 const XLATensor& found_inf,
+                                 double scale_growth_factor,
+                                 double scale_backoff_factor,
+                                 int growth_interval);
 
   static XLATensor abs(const XLATensor& input);
   static void abs_(XLATensor& input);
@@ -415,8 +415,14 @@ class XLATensor {
   static XLATensor clamp(const XLATensor& input,
                          const c10::optional<at::Scalar>& min,
                          const c10::optional<at::Scalar>& max);
+  static XLATensor clamp(const XLATensor& input,
+                         const c10::optional<at::Tensor>& min,
+                         const c10::optional<at::Tensor>& max);
   static void clamp_(XLATensor& input, const c10::optional<at::Scalar>& min,
                      const c10::optional<at::Scalar>& max);
+  static void clamp_out(XLATensor& out, const XLATensor& input,
+                        const c10::optional<at::Tensor>& min,
+                        const c10::optional<at::Tensor>& max);
 
   static XLATensor clone(const XLATensor& input);
 
@@ -1053,7 +1059,7 @@ class XLATensor {
 
   static XLATensor std(const XLATensor& input,
                        std::vector<xla::int64> dimensions,
-                       bool keep_reduced_dimensions, bool unbiased);
+                       bool keep_reduced_dimensions, xla::int64 correction);
 
   static XLATensor sub(
       const XLATensor& input, const XLATensor& other, const at::Scalar& alpha,
@@ -1161,8 +1167,8 @@ class XLATensor {
       std::vector<xla::int64> input_size);
 
   static XLATensor var(const XLATensor& input,
-                       std::vector<xla::int64> dimensions, bool unbiased,
-                       bool keep_reduced_dimensions);
+                       std::vector<xla::int64> dimensions,
+                       xla::int64 correction, bool keep_reduced_dimensions);
 
   // Like reshape, but it returns a view into the original tensor.
   static XLATensor view(const XLATensor& input,
