@@ -87,7 +87,7 @@ function maybe_install_sources {
     sudo apt-get install -y git
     git clone --recursive https://github.com/pytorch/pytorch.git
     cd pytorch
-    git clone --recursive https://github.com/pytorch/xla.git
+    git clone --recursive https://github.com/codeislife99/xla.git
     export RELEASE_VERSION="nightly"
   fi
 }
