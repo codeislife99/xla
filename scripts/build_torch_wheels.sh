@@ -206,7 +206,7 @@ function install_torchvision_from_source() {
   # torchvision_repo_version="master"
   # Cannot install torchvision package with PyTorch installation from source.
   # https://github.com/pytorch/vision/issues/967
-  git clone -b https://github.com/pytorch/vision.git
+  git clone https://github.com/pytorch/vision.git
   git checkout "${TORCHVISION_COMMIT_ID}"
   pushd vision
   python setup.py bdist_wheel
