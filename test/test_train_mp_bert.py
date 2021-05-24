@@ -22,7 +22,6 @@ import pandas as pd
 import torch_xla.test.test_utils as test_utils
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
-import torch_xla.distributed.parallel_loader as pl
 
 
 def _train_update(device, step, loss, tracker, epoch, writer):
@@ -174,18 +173,23 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
 
     print(device)
     lrlast = 1e-3
+    model = model.to(device)
+
     optimizer = optim.Adam(model.parameters(), lr = lrlast)
     # scheduler = lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
-    model = model.to(device)
     print('==> Starting Training')
     if amp_enabled:
         autocast, scaler = get_autocast_and_scaler(xla_enabled)
 
-    train_device_loader = pl.MpDeviceLoader(dataloaders_dict['train'], device)
+    if xla_enabled:
+        import torch_xla.distributed.parallel_loader as pl
+        train_device_loader = pl.MpDeviceLoader(dataloaders_dict['train'], device)
+    else:
+        train_device_loader = dataloaders_dict['train']
 
     for epoch in range(num_epochs):
         epoch_time = time.time()
-        tracker = xm.RateTracker()
+        # tracker = xm.RateTracker()
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
         model.train()  # Set model to training mode          
@@ -193,8 +197,11 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
         for step, (inputs, sentiment) in enumerate(train_device_loader):
             # import pdb;pdb.set_trace()
             # sentiment = torch.max(sentiment.float(), 1)[1]
-            # inputs = inputs.to(device) 
-            # sentiment = sentiment.to(device)
+            tracker = xm.RateTracker()
+
+            if not xla_enabled:
+                inputs = inputs.to(device) 
+                sentiment = sentiment.to(device)
             optimizer.zero_grad()
             if amp_enabled:
                 loss, optimizer = loop_with_amp(model, inputs, sentiment, optimizer, xla_enabled, autocast, scaler)
@@ -211,11 +218,12 @@ def _mp_fn(index):
     train_bert(dataset_path, xla_enabled, amp_enabled)
 
 if __name__ == "__main__":
-    dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
-    # dataset_path = "test/IMDB Dataset.csv"
-    xla_enabled = True
-    amp_enabled = False
+    xla_enabled = False
+    amp_enabled = True
+
     if xla_enabled:
+        dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
         xmp.spawn(_mp_fn, nprocs=1)
-    else: 
+    else:
+        dataset_path = "test/IMDB Dataset.csv"
         train_bert(dataset_path, xla_enabled, amp_enabled)

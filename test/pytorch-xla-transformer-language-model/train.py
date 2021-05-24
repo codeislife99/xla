@@ -263,6 +263,6 @@ def main(index):
 
 
 if __name__ == '__main__':
-  xla_enabled= False
+  xla_enabled= True
   amp_enabled= True
   xmp.spawn(main, args=())
