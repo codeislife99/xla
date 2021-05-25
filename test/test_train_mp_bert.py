@@ -28,7 +28,7 @@ def _train_update(device, step, loss, tracker, epoch, writer):
     test_utils.print_training_update(
         device,
         step,
-        loss.item(),
+        loss,  
         tracker.rate(),
         tracker.global_rate(),
         epoch,
@@ -134,7 +134,7 @@ def loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled):
 def train_bert(dataset_path, xla_enabled, amp_enabled):
     max_seq_length = 256
     batch_size = 32
-    num_epochs = 25
+    num_epochs = 10
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     model = BERT()
@@ -184,6 +184,7 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
     if xla_enabled:
         import torch_xla.distributed.parallel_loader as pl
         train_device_loader = pl.MpDeviceLoader(dataloaders_dict['train'], device)
+        # train_device_loader = dataloaders_dict['train']
     else:
         train_device_loader = dataloaders_dict['train']
 
@@ -195,11 +196,8 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
         model.train()  # Set model to training mode          
         # Iterate over data.
         for step, (inputs, sentiment) in enumerate(train_device_loader):
-            # import pdb;pdb.set_trace()
-            # sentiment = torch.max(sentiment.float(), 1)[1]
-            tracker = xm.RateTracker()
-
-            if not xla_enabled:
+            tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
+            if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
                 inputs = inputs.to(device) 
                 sentiment = sentiment.to(device)
             optimizer.zero_grad()
@@ -209,18 +207,23 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
                 loss, optimizer = loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled)
             tracker.add(inputs.size(0))
             _train_update(device, step, loss, tracker, epoch, None)
-        
+
+
         time_elapsed = time.time() - epoch_time
         print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')
+
+    if xla_enabled and debug_enabled:
+        import torch_xla.debug.metrics as met
+        print(met.metrics_report())
 
 def _mp_fn(index):
     torch.set_default_tensor_type("torch.FloatTensor")
     train_bert(dataset_path, xla_enabled, amp_enabled)
 
 if __name__ == "__main__":
-    xla_enabled = False
+    xla_enabled = True
     amp_enabled = True
-
+    debug_enabled = True
     if xla_enabled:
         dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
         xmp.spawn(_mp_fn, nprocs=1)
