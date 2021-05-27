@@ -132,7 +132,7 @@ def loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled):
     return loss, optimizer
 
 def train_bert(dataset_path, xla_enabled, amp_enabled):
-    max_seq_length = 256
+    max_seq_length = 384
     batch_size = 32
     num_epochs = 10
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -220,13 +220,19 @@ def _mp_fn(index):
     torch.set_default_tensor_type("torch.FloatTensor")
     train_bert(dataset_path, xla_enabled, amp_enabled)
 
+def download_dataset():
+    dataset_dir = os.path.dirname(dataset_path) 
+    os.system(f"wget -P {dataset_dir} https://raw.githubusercontent.com/sugi-chan/custom_bert_pipeline/master/IMDB%20Dataset.csv")
+
 if __name__ == "__main__":
     xla_enabled = True
     amp_enabled = True
     debug_enabled = True
     if xla_enabled:
-        dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
+        dataset_path = '/pytorch/xla/test/IMDB_Dataset.csv'
+        download_dataset()
         xmp.spawn(_mp_fn, nprocs=1)
     else:
-        dataset_path = "test/IMDB Dataset.csv"
+        dataset_path = os.path.join(os.getcwd(), "IMDB_Dataset.csv")
+        download_dataset()
         train_bert(dataset_path, xla_enabled, amp_enabled)
