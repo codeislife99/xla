@@ -141,8 +141,8 @@ def train_bert(model_name, amp_enabled, xla_enabled, dataset_path, num_examples=
             _train_update(device, step, loss, tracker, epoch, None)
 
 if __name__ == "__main__":
+    # dataset_path = "/pytorch/xla/test/aclImdb/"
     dataset_path = "test/aclImdb/"
-    # dataset_path = "test/aclImdb/"
     model_name = "bert-base-uncased"
     amp_enabled = True
     xla_enabled = False  # Select False to enable torch cuda
