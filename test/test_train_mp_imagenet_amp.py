@@ -218,6 +218,10 @@ def train_imagenet():
             tracker.add(FLAGS.batch_size)
             if lr_scheduler:
                 lr_scheduler.step()
+
+            import resource
+            print(f" CPU Usage After: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}")
+
             if step % FLAGS.log_steps == 0:
                 # _train_update(device, step, loss, tracker, epoch, writer)
                 xm.add_step_closure(

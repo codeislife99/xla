@@ -59,7 +59,7 @@ class text_dataset(Dataset):
         self.ids_review_list = [] 
         self.list_of_labels = []
         # for index in range(len(self.x_y_list[0])):
-        self.reduced_size = 1000
+        self.reduced_size = 2000
         for index in range(self.reduced_size):
             tokenized_review = self.tokenizer.tokenize(self.x_y_list[0][index])
         
@@ -196,6 +196,9 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
         model.train()  # Set model to training mode          
         # Iterate over data.
         for step, (inputs, sentiment) in enumerate(train_device_loader):
+            if cpu_mem_usage: 
+                import resource
+                print(f" CPU Usage Before: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}")
             tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
             if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
                 inputs = inputs.to(device) 
@@ -207,7 +210,9 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
                 loss, optimizer = loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled)
             tracker.add(inputs.size(0))
             _train_update(device, step, loss, tracker, epoch, None)
-
+            if cpu_mem_usage: 
+                import resource
+                print(f" CPU Usage After: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}")
 
         time_elapsed = time.time() - epoch_time
         print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')
@@ -228,11 +233,12 @@ if __name__ == "__main__":
     xla_enabled = True
     amp_enabled = True
     debug_enabled = True
+    cpu_mem_usage = True
     if xla_enabled:
-        dataset_path = '/pytorch/xla/test/IMDB_Dataset.csv'
+        dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
         download_dataset()
         xmp.spawn(_mp_fn, nprocs=1)
     else:
-        dataset_path = os.path.join(os.getcwd(), "IMDB_Dataset.csv")
+        dataset_path = os.path.join(os.getcwd(), "IMDB Dataset.csv")
         download_dataset()
         train_bert(dataset_path, xla_enabled, amp_enabled)
