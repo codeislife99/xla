@@ -36,13 +36,11 @@ def _train_update(device, step, loss, tracker, epoch, writer):
     )
 
 class BERT(nn.Module):
-
     def __init__(self):
         super(BERT, self).__init__()
 
         options_name = "bert-base-uncased"
         self.encoder = BertForSequenceClassification.from_pretrained(options_name)
-
     def forward(self, text, label):
         loss, text_fea = self.encoder(text, labels=label)[:2]
 
@@ -59,7 +57,7 @@ class text_dataset(Dataset):
         self.ids_review_list = [] 
         self.list_of_labels = []
         # for index in range(len(self.x_y_list[0])):
-        self.reduced_size = 2000
+        self.reduced_size = 1000
         for index in range(self.reduced_size):
             tokenized_review = self.tokenizer.tokenize(self.x_y_list[0][index])
         
@@ -132,9 +130,9 @@ def loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled):
     return loss, optimizer
 
 def train_bert(dataset_path, xla_enabled, amp_enabled):
-    max_seq_length = 384
+    max_seq_length = 128
     batch_size = 32
-    num_epochs = 10
+    num_epochs = 1
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     model = BERT()
@@ -188,35 +186,56 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
     else:
         train_device_loader = dataloaders_dict['train']
 
-    for epoch in range(num_epochs):
-        epoch_time = time.time()
-        # tracker = xm.RateTracker()
-        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-        print('-' * 10)
-        model.train()  # Set model to training mode          
-        # Iterate over data.
-        for step, (inputs, sentiment) in enumerate(train_device_loader):
+    if dlprof_enabled and not xla_enabled and False:
+        with torch.autograd.profiler.emit_nvtx():
+            for epoch in range(num_epochs):
+                epoch_time = time.time()
+                # tracker = xm.RateTracker()
+                print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+                print('-' * 10)
+                model.train()  # Set model to training mode          
+                # Iterate over data.
+                for step, (inputs, sentiment) in enumerate(train_device_loader):
+                    tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
+                    if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
+                        inputs = inputs.to(device) 
+                        sentiment = sentiment.to(device)
+                    optimizer.zero_grad()
+                    if amp_enabled:
+                        loss, optimizer = loop_with_amp(model, inputs, sentiment, optimizer, xla_enabled, autocast, scaler)
+                    else:
+                        loss, optimizer = loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled)
+                    tracker.add(inputs.size(0))
+                    _train_update(device, step, loss, tracker, epoch, None)
+
+                time_elapsed = time.time() - epoch_time
+                print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')
+    else:
+        for epoch in range(num_epochs):
+            epoch_time = time.time()
+            # tracker = xm.RateTracker()
+            print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+            print('-' * 10)
+            model.train()  # Set model to training mode          
+            # Iterate over data.
             if cpu_mem_usage: 
                 import resource
                 print(f" CPU Usage Before: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}")
-            tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
-            if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
-                inputs = inputs.to(device) 
-                sentiment = sentiment.to(device)
-            optimizer.zero_grad()
-            if amp_enabled:
-                loss, optimizer = loop_with_amp(model, inputs, sentiment, optimizer, xla_enabled, autocast, scaler)
-            else:
-                loss, optimizer = loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled)
-            tracker.add(inputs.size(0))
-            _train_update(device, step, loss, tracker, epoch, None)
-            if cpu_mem_usage: 
-                import resource
-                print(f" CPU Usage After: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}")
+            for step, (inputs, sentiment) in enumerate(train_device_loader):
+                tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
+                if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
+                    inputs = inputs.to(device) 
+                    sentiment = sentiment.to(device)
+                optimizer.zero_grad()
+                if amp_enabled:
+                    loss, optimizer = loop_with_amp(model, inputs, sentiment, optimizer, xla_enabled, autocast, scaler)
+                else:
+                    loss, optimizer = loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled)
+                tracker.add(inputs.size(0))
+                _train_update(device, step, loss, tracker, epoch, None)
 
-        time_elapsed = time.time() - epoch_time
-        print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')
-
+            time_elapsed = time.time() - epoch_time
+            print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')        
     if xla_enabled and debug_enabled:
         import torch_xla.debug.metrics as met
         print(met.metrics_report())
@@ -227,13 +246,17 @@ def _mp_fn(index):
 
 def download_dataset():
     dataset_dir = os.path.dirname(dataset_path) 
-    os.system(f"wget -P {dataset_dir} https://raw.githubusercontent.com/sugi-chan/custom_bert_pipeline/master/IMDB%20Dataset.csv")
+    os.system(f"wget -N -P {dataset_dir} https://raw.githubusercontent.com/sugi-chan/custom_bert_pipeline/master/IMDB%20Dataset.csv")
 
 if __name__ == "__main__":
     xla_enabled = True
     amp_enabled = True
-    debug_enabled = True
-    cpu_mem_usage = True
+    debug_enabled = False
+    dlprof_enabled = True
+    cpu_mem_usage = False
+    if dlprof_enabled and not xla_enabled and False: 
+        import nvidia_dlprof_pytorch_nvtx
+        nvidia_dlprof_pytorch_nvtx.init()
     if xla_enabled:
         dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
         download_dataset()
