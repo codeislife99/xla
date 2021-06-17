@@ -18,11 +18,13 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 from random import randrange
 import torch.nn.functional as F
-import pandas as pd 
+import pandas as pd
+from transformers.models.bert import configuration_bert 
 import torch_xla.test.test_utils as test_utils
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
-
+import torch_xla.debug.profiler as xp
+import multiprocessing
 
 def _train_update(device, step, loss, tracker, epoch, writer):
     test_utils.print_training_update(
@@ -41,6 +43,23 @@ class BERT(nn.Module):
 
         options_name = "bert-base-uncased"
         self.encoder = BertForSequenceClassification.from_pretrained(options_name)
+        # import pdb;pdb.set_trace()
+    def forward(self, text, label):
+        loss, text_fea = self.encoder(text, labels=label)[:2]
+
+        return loss
+
+class BERTdownsized(nn.Module):
+    def __init__(self):
+        super(BERTdownsized, self).__init__()
+
+        options_name = "bert-base-uncased"
+        from transformers import BertConfig
+        configuration = BertConfig()
+        configuration.num_hidden_layers=12
+        self.encoder = BertForSequenceClassification(configuration)
+        # import pdb;pdb.set_trace()
+        print(self.encoder)
     def forward(self, text, label):
         loss, text_fea = self.encoder(text, labels=label)[:2]
 
@@ -131,11 +150,12 @@ def loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled):
 
 def train_bert(dataset_path, xla_enabled, amp_enabled):
     max_seq_length = 128
-    batch_size = 32
+    batch_size = 16
     num_epochs = 1
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
-    model = BERT()
+    # model = BERT()
+    model = BERTdownsized()
     dat = pd.read_csv(dataset_path)
     print(dat.head)
 
@@ -181,10 +201,12 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
 
     if xla_enabled:
         import torch_xla.distributed.parallel_loader as pl
+        server = xp.start_server(port_number)
         train_device_loader = pl.MpDeviceLoader(dataloaders_dict['train'], device)
         # train_device_loader = dataloaders_dict['train']
     else:
         train_device_loader = dataloaders_dict['train']
+    
 
     if dlprof_enabled and not xla_enabled and False:
         with torch.autograd.profiler.emit_nvtx():
@@ -222,6 +244,8 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
                 import resource
                 print(f" CPU Usage Before: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}")
             for step, (inputs, sentiment) in enumerate(train_device_loader):
+                if step == 5:
+                    training_started.set()
                 tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
                 if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
                     inputs = inputs.to(device) 
@@ -252,15 +276,24 @@ if __name__ == "__main__":
     xla_enabled = True
     amp_enabled = True
     debug_enabled = False
-    dlprof_enabled = True
+    dlprof_enabled = False
     cpu_mem_usage = False
+
     if dlprof_enabled and not xla_enabled and False: 
         import nvidia_dlprof_pytorch_nvtx
         nvidia_dlprof_pytorch_nvtx.init()
     if xla_enabled:
+        port_number = 8192
+        training_started = multiprocessing.Event()
         dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
         download_dataset()
-        xmp.spawn(_mp_fn, nprocs=1)
+        def target_fn():
+            xmp.spawn(_mp_fn, nprocs=1)
+        p = multiprocessing.Process(target=target_fn, args=())
+        p.start()
+        training_started.wait()
+        xp.trace(f'localhost:{port_number}', '/pytorch/xla/test/bert_tensorboard')
+        # xmp.spawn(_mp_fn, nprocs=1)
     else:
         dataset_path = os.path.join(os.getcwd(), "IMDB Dataset.csv")
         download_dataset()
