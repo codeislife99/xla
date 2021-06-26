@@ -1,4 +1,5 @@
 import torch
+from torch.autograd.function import traceable
 from transformers import BertTokenizer, BertForSequenceClassification
 # from pytorch_pretrained_bert import BertTokenizer, BertModel, BertForMaskedLM
 
@@ -23,8 +24,9 @@ from transformers.models.bert import configuration_bert
 import torch_xla.test.test_utils as test_utils
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
-import torch_xla.debug.profiler as xp
 import multiprocessing
+import torch.profiler
+import time 
 
 def _train_update(device, step, loss, tracker, epoch, writer):
     test_utils.print_training_update(
@@ -56,7 +58,7 @@ class BERTdownsized(nn.Module):
         options_name = "bert-base-uncased"
         from transformers import BertConfig
         configuration = BertConfig()
-        configuration.num_hidden_layers=12
+        configuration.num_hidden_layers=num_hidden_layers
         self.encoder = BertForSequenceClassification(configuration)
         # import pdb;pdb.set_trace()
         print(self.encoder)
@@ -65,6 +67,22 @@ class BERTdownsized(nn.Module):
 
         return loss
 
+class BERTNoDropout(nn.Module):
+    def __init__(self):
+        super(BERTNoDropout, self).__init__()
+
+        options_name = "bert-base-uncased"
+        from transformers import BertConfig
+        from modeling_bert import BertForSequenceClassification
+        configuration = BertConfig()
+        configuration.num_hidden_layers=num_hidden_layers
+        self.encoder = BertForSequenceClassification(configuration)
+        # import pdb;pdb.set_trace()
+        print(self.encoder)
+    def forward(self, text, label):
+        loss, text_fea = self.encoder(text, labels=label)[:2]
+        return loss 
+        
 class text_dataset(Dataset):
     def __init__(self,x_y_list, max_seq_length, tokenizer, transform=None):
         
@@ -148,14 +166,61 @@ def loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled):
         optimizer.step()
     return loss, optimizer
 
+def step_pytorch_profile(prof): 
+    if pytorch_profile:
+        prof.step()
+
+def publish_cpu_mem_usage(cpu_mem_usage):
+    if cpu_mem_usage: 
+        import resource
+        print(f" CPU Usage Before: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}")
+
+def full_train_epoch(epoch, num_epochs, model, train_device_loader, device, optimizer, autocast, scaler, **kwargs):
+    epoch_time = time.time()
+    # tracker = xm.RateTracker()
+    print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+    print('-' * 10)
+    model.train()  # Set model to training mode          
+    # Iterate over data.
+    publish_cpu_mem_usage(cpu_mem_usage)
+    for step, (inputs, sentiment) in enumerate(train_device_loader):
+        if xla_enabled:
+            if xla_profile: 
+                if step == kwargs['start_profile_after_step']:
+                    training_started.set()
+        elif pytorch_profile and (step + 1)== kwargs['break_after_steps']:
+            break 
+        tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
+        if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
+            inputs = inputs.to(device) 
+            sentiment = sentiment.to(device)
+        # if step == 1:
+        #     trace_model(model, inputs, sentiment)
+        #     import sys
+        #     sys.exit()
+        optimizer.zero_grad()
+        if amp_enabled:
+            loss, optimizer = loop_with_amp(model, inputs, sentiment, optimizer, xla_enabled, autocast, scaler)
+        else:
+            loss, optimizer = loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled)
+        tracker.add(inputs.size(0))
+        # _train_update(device, step, loss, tracker, epoch, None)
+        if pytorch_profile: 
+            kwargs['profiler'].step()
+    time_elapsed = time.time() - epoch_time
+    print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')     
+
+def trace_model(model, inputs, sentiment):
+    traced_model = torch.jit.trace(model, [inputs, sentiment])
+    torch._C._jit_pass_onnx_function_substitution(traced_model.graph)
+    print(traced_model.graph)
+
 def train_bert(dataset_path, xla_enabled, amp_enabled):
-    max_seq_length = 128
-    batch_size = 16
-    num_epochs = 1
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     # model = BERT()
     model = BERTdownsized()
+    # model = BERTNoDropout()
     dat = pd.read_csv(dataset_path)
     print(dat.head)
 
@@ -196,71 +261,44 @@ def train_bert(dataset_path, xla_enabled, amp_enabled):
     optimizer = optim.Adam(model.parameters(), lr = lrlast)
     # scheduler = lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
     print('==> Starting Training')
+    autocast, scaler = None, None
     if amp_enabled:
         autocast, scaler = get_autocast_and_scaler(xla_enabled)
-
+    
     if xla_enabled:
         import torch_xla.distributed.parallel_loader as pl
-        server = xp.start_server(port_number)
+        if xla_profile:
+            server = xp.start_server(port_number)
         train_device_loader = pl.MpDeviceLoader(dataloaders_dict['train'], device)
         # train_device_loader = dataloaders_dict['train']
     else:
         train_device_loader = dataloaders_dict['train']
     
 
-    if dlprof_enabled and not xla_enabled and False:
-        with torch.autograd.profiler.emit_nvtx():
+    start_time = time.time()
+    if dlprof_enabled: 
+        if xla_enabled: # Profiling DLProf & XLA Profiler with XLA 
             for epoch in range(num_epochs):
-                epoch_time = time.time()
-                # tracker = xm.RateTracker()
-                print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-                print('-' * 10)
-                model.train()  # Set model to training mode          
-                # Iterate over data.
-                for step, (inputs, sentiment) in enumerate(train_device_loader):
-                    tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
-                    if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
-                        inputs = inputs.to(device) 
-                        sentiment = sentiment.to(device)
-                    optimizer.zero_grad()
-                    if amp_enabled:
-                        loss, optimizer = loop_with_amp(model, inputs, sentiment, optimizer, xla_enabled, autocast, scaler)
-                    else:
-                        loss, optimizer = loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled)
-                    tracker.add(inputs.size(0))
-                    _train_update(device, step, loss, tracker, epoch, None)
-
-                time_elapsed = time.time() - epoch_time
-                print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')
-    else:
+                full_train_epoch(epoch, num_epochs, model, train_device_loader, device, optimizer, autocast, scaler, start_profile_after_step=5)
+        else: # Profiling DLProf with PyTorch 
+            with torch.autograd.profiler.emit_nvtx():
+                for epoch in range(num_epochs):
+                    full_train_epoch(epoch, num_epochs, model, train_device_loader, device, optimizer, autocast, scaler)
+    elif pytorch_profile: # Using Default PyTorch Profiler
+        with torch.profiler.profile(
+                schedule=torch.profiler.schedule(wait=2, warmup=3, active=15),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(pytorch_tb_folder),
+                record_shapes=True
+        ) as prof:    
+            for epoch in range(num_epochs):
+                full_train_epoch(epoch, num_epochs, model, train_device_loader, device, optimizer, autocast, scaler, profiler=prof, break_after_steps=20)
+    else: # Using XLA Profiler with XLA 
         for epoch in range(num_epochs):
-            epoch_time = time.time()
-            # tracker = xm.RateTracker()
-            print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-            print('-' * 10)
-            model.train()  # Set model to training mode          
-            # Iterate over data.
-            if cpu_mem_usage: 
-                import resource
-                print(f" CPU Usage Before: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}")
-            for step, (inputs, sentiment) in enumerate(train_device_loader):
-                if step == 5:
-                    training_started.set()
-                tracker = xm.RateTracker()  # Placing the tracker here frees it of I/O time. 
-                if not xla_enabled:  # This section is not necessary (but doesn't cause any performance problems) for XLA 
-                    inputs = inputs.to(device) 
-                    sentiment = sentiment.to(device)
-                optimizer.zero_grad()
-                if amp_enabled:
-                    loss, optimizer = loop_with_amp(model, inputs, sentiment, optimizer, xla_enabled, autocast, scaler)
-                else:
-                    loss, optimizer = loop_without_amp(model, inputs, sentiment, optimizer, xla_enabled)
-                tracker.add(inputs.size(0))
-                _train_update(device, step, loss, tracker, epoch, None)
+            full_train_epoch(epoch, num_epochs, model, train_device_loader, device, optimizer, autocast, scaler, start_profile_after_step=5)
+    total_epoch_time = time.time() - start_time 
+    print(f"Epoch Time(s) for {num_epochs} epochs = {total_epoch_time}")
 
-            time_elapsed = time.time() - epoch_time
-            print(f'Epoch complete in {time_elapsed // 60}m {time_elapsed % 60}s')        
-    if xla_enabled and debug_enabled:
+    if xla_enabled and xla_debug_metrics_enabled:
         import torch_xla.debug.metrics as met
         print(met.metrics_report())
 
@@ -272,27 +310,54 @@ def download_dataset():
     dataset_dir = os.path.dirname(dataset_path) 
     os.system(f"wget -N -P {dataset_dir} https://raw.githubusercontent.com/sugi-chan/custom_bert_pipeline/master/IMDB%20Dataset.csv")
 
+def get_hlo_dumps():
+    os.environ['TF_CPP_MIN_LOG_LEVEL']='0'
+    # os.environ['TF_CPP_VMODULE']="hlo_pass_pipeline"="1"
+    os.environ['NUM_HIDDEN_LAYERS']=str(num_hidden_layers)
+    os.environ['XLA_FLAGS']=f"--xla_dump_to=/pytorch/xla/test/bert_hlo_{num_hidden_layers} --xla_dump_hlo_as_text --xla_dump_hlo_as_dot --xla_dump_hlo_pass_re=.*"
+
 if __name__ == "__main__":
-    xla_enabled = True
     amp_enabled = True
-    debug_enabled = False
+
+    # PT-ony - disabel XLA
+    xla_enabled = True
+    xla_profile = False
+    xla_debug_metrics_enabled = True
+    xla_tb_folder = "/pytorch/xla/test/bert_xla_tensorboard"
+    xla_dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
+
     dlprof_enabled = False
     cpu_mem_usage = False
+    hlo_dump = False
 
-    if dlprof_enabled and not xla_enabled and False: 
+    pt_dataset_path = "IMDB Dataset.csv"
+    pytorch_profile = False
+    pytorch_tb_folder = "test/bert_pt_tensorboard_non_amp_one_hidden_layer"
+    
+    num_hidden_layers = 12
+    max_seq_length = 128
+    batch_size = 16
+    num_epochs = 10
+
+    if hlo_dump:
+        get_hlo_dumps()
+
+    if dlprof_enabled and not xla_enabled: 
         import nvidia_dlprof_pytorch_nvtx
         nvidia_dlprof_pytorch_nvtx.init()
     if xla_enabled:
+        import torch_xla.debug.profiler as xp
         port_number = 8192
         training_started = multiprocessing.Event()
-        dataset_path = '/pytorch/xla/test/IMDB Dataset.csv'
+        dataset_path = xla_dataset_path
         download_dataset()
         def target_fn():
             xmp.spawn(_mp_fn, nprocs=1)
         p = multiprocessing.Process(target=target_fn, args=())
         p.start()
-        training_started.wait()
-        xp.trace(f'localhost:{port_number}', '/pytorch/xla/test/bert_tensorboard')
+        if xla_profile:
+            training_started.wait()
+            xp.trace(f'localhost:{port_number}', xla_tb_folder)
         # xmp.spawn(_mp_fn, nprocs=1)
     else:
         dataset_path = os.path.join(os.getcwd(), "IMDB Dataset.csv")
