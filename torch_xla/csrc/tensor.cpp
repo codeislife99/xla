@@ -1367,6 +1367,7 @@ void XLATensor::SyncTensorsGraph(std::vector<XLATensor>* tensors,
 void XLATensor::SyncLiveTensorsGraph(const Device* device,
                                      absl::Span<const std::string> devices,
                                      bool wait) {
+  TF_VLOG(4) << "SyncLiveTensorsGraph starting...";
   tensorflow::profiler::TraceMe activity(
       "SyncLiveTensorsGraph", tensorflow::profiler::TraceMeLevel::kInfo);
   auto tensors = GetLiveTensors(device);

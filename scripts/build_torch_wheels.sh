@@ -131,6 +131,7 @@ function install_llvm_clang() {
 }
 
 function install_req_packages() {
+  sudo apt-get update
   sudo apt-get -y install python-pip git curl libopenblas-dev vim apt-transport-https ca-certificates wget procps
   maybe_install_cuda
   install_bazel
