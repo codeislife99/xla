@@ -152,6 +152,8 @@ def train(loader, device, model, optimizer, autocast, scaler):
                 loss, optimizer = loop_without_amp(model, input_ids, attention_mask, labels, optimizer)
 
             tracker.add(input_ids.size(0))
+            _train_update(device, step, loss, tracker, epoch, None)
+
         num_steps = step + 1
         end_time = time.time()
         print("Epoch ", epoch, (end_time - start_time)/num_steps)
