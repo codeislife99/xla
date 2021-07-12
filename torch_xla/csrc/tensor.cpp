@@ -950,19 +950,24 @@ std::vector<at::Tensor> XLATensor::GetTensorsOpByOp(
 }
 
 std::vector<at::Tensor> XLATensor::GetTensors(std::vector<XLATensor>* tensors) {
+  TF_VLOG(4) << "Inside GetTensors now";
   static const bool op_by_op =
       xla::sys_util::GetEnvBool("XLA_GET_TENSORS_OPBYOP", false);
   return op_by_op ? GetTensorsOpByOp(tensors) : GetTensorsFused(tensors);
+  TF_VLOG(4) << "Done with GetTensors";
 }
 
 std::vector<at::Tensor> XLATensor::GetTensorsFused(
     std::vector<XLATensor>* tensors) {
   SyncTensorsConfig config;
   config.force_xla_data = false;
+  TF_VLOG(4) << "Calling Sync Tensors Graph Internal from Get Tensors Fused";
   auto async = SyncTensorsGraphInternal(tensors, {}, config);
+  TF_VLOG(4) << "Returned From Sync Tensors Graph Internal from Get Tensors Fused";
   if (async != nullptr) {
     async->mwait.Wait();
   }
+  TF_VLOG(4) << "Gather Tensors XLA Data";
   std::vector<xla::ComputationClient::DataPtr> tensors_data =
       GatherTensorsXlaData(
           *tensors,
@@ -972,6 +977,7 @@ std::vector<at::Tensor> XLATensor::GetTensorsFused(
               : absl::Span<const xla::ComputationClient::DataPtr>());
   std::vector<xla::Literal> literals =
       xla::ComputationClient::Get()->TransferFromServer(tensors_data);
+  TF_VLOG(4) << "Going Inside Fetch Tensors now";
   return FetchTensors(tensors, literals,
                       async != nullptr ? &async->indices : nullptr);
 }
@@ -979,6 +985,7 @@ std::vector<at::Tensor> XLATensor::GetTensorsFused(
 std::vector<at::Tensor> XLATensor::FetchTensors(
     std::vector<XLATensor>* tensors, absl::Span<const xla::Literal> literals,
     const std::vector<size_t>* indices) {
+  TF_VLOG(4) << "Inside Fetch Tensors";
   std::vector<at::Tensor> results;
   size_t literals_index = 0;
   size_t sync_index = 0;
@@ -1002,6 +1009,7 @@ std::vector<at::Tensor> XLATensor::FetchTensors(
       }
     }
   }
+  TF_VLOG(4) << "Done with Fetch Tensors";
   return results;
 }
 

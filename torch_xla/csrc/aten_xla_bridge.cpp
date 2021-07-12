@@ -106,10 +106,12 @@ XLATensor GetOrCreateXlaTensor(const c10::optional<at::Tensor>& tensor,
 }
 
 std::vector<at::Tensor> XlaCreateTensorList(const at::TensorList& tensors) {
+  TF_VLOG(4) << "Creating Tensors List";
   std::vector<at::Tensor> aten_xla_tensors(tensors.size());
   std::vector<XLATensor> xla_tensors;
   // We need to separate out the defined tensors first, GetXlaTensor() doesn't
   // work with undefined tensors.
+  TF_VLOG(4) << "Translating in XlaCreateTensorList";
   std::vector<bool> to_translate(tensors.size());
   for (size_t i = 0; i < tensors.size(); ++i) {
     const at::Tensor& tensor = tensors[i];
@@ -123,7 +125,9 @@ std::vector<at::Tensor> XlaCreateTensorList(const at::TensorList& tensors) {
       }
     }
   }
+  TF_VLOG(4) << "Calling Get Tensors";
   auto defined_aten_xla_tensors = XLATensor::GetTensors(&xla_tensors);
+  TF_VLOG(4) << "Returned from Get Tensors Call";
   // Insert undefined tensors into the result, back into the original undefined
   // positions.
   for (size_t i = 0, defined_pos = 0; i < tensors.size(); ++i) {
@@ -131,6 +135,7 @@ std::vector<at::Tensor> XlaCreateTensorList(const at::TensorList& tensors) {
       aten_xla_tensors[i] = std::move(defined_aten_xla_tensors[defined_pos++]);
     }
   }
+  TF_VLOG(4) << "Done with Creating Tensors List";
   return aten_xla_tensors;
 }
 
