@@ -370,9 +370,14 @@ at::Tensor AtenXlaType::_log_softmax_backward_data(
 
 std::tuple<at::Tensor, at::Tensor> AtenXlaType::_pack_padded_sequence(
     const at::Tensor& input, const at::Tensor& lengths, bool batch_first) {
+  TF_VLOG(4) << "Inside AtenXlaType::_pack_padded_sequence";
+  std::cout << "COUTING Inside AtenXlaType::_pack_padded_sequence";
+
   XLA_FN_COUNTER("xla::");
   std::vector<at::Tensor> xla_tensors = {lengths};
   auto cpu_tensors = bridge::XlaCreateTensorList(xla_tensors);
+
+  TF_VLOG(4) << "After Creating Tensor List , before at::native::_pack_padded_sequence";
   return at::native::_pack_padded_sequence(input, cpu_tensors[0], batch_first);
 }
 

@@ -766,17 +766,28 @@ void InitXlaModuleBindings(py::module m) {
     return result;
   });
   m.def("_xla_get_cpu_tensors", [](const std::vector<at::Tensor>& tensors) {
+    TF_VLOG(4) << "Inside CPP _xla_get_cpu_tensors";
+    std::cout << "COUTING Inside CPP _xla_get_cpu_tensors";
     std::vector<at::Tensor> result;
     {
       NoGilSection nogil;
+      TF_VLOG(4) << "Before Calling XlaCreateTensorList cpu_tensors";
+      std::cout << "COUTING Before Calling XlaCreateTensorList cpu_tensors";
+
       std::vector<at::Tensor> cpu_tensors =
           bridge::XlaCreateTensorList(tensors);
+      TF_VLOG(4) << "After Calling XlaCreateTensorList cpu_tensors";
+      std::cout << "COUTING After Calling XlaCreateTensorList cpu_tensors";
+
       result.reserve(cpu_tensors.size());
       for (size_t i = 0; i < cpu_tensors.size(); ++i) {
         result.push_back(torch::autograd::make_variable(
             cpu_tensors[i], /*requires_grad=*/tensors.at(i).requires_grad()));
       }
     }
+    TF_VLOG(4) << "Returning from init_python_bindings.cpp";
+    std::cout << "COUTING Returning from init_python_bindings.cpp";
+
     return result;
   });
   m.def("_xla_get_tensor_view_alias_id",

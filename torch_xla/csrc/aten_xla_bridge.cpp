@@ -11,6 +11,32 @@
 #include "torch_xla/csrc/tensor_impl.h"
 #include "torch_xla/csrc/torch_util.h"
 
+
+#include "torch_xla/csrc/aten_xla_type.h"
+
+#include <ATen/Context.h>
+#include <ATen/native/BinaryOps.h>
+
+#include <mutex>
+
+#include "tensorflow/compiler/xla/xla_client/debug_macros.h"
+#include "tensorflow/compiler/xla/xla_client/metrics.h"
+#include "tensorflow/compiler/xla/xla_client/sys_util.h"
+#include "tensorflow/compiler/xla/xla_client/util.h"
+#include "torch_xla/csrc/aten_autograd_ops.h"
+#include "torch_xla/csrc/aten_xla_bridge.h"
+#include "torch_xla/csrc/aten_xla_type_default.h"
+#include "torch_xla/csrc/debug_util.h"
+#include "torch_xla/csrc/device.h"
+#include "torch_xla/csrc/helpers.h"
+#include "torch_xla/csrc/ops/as_strided.h"
+#include "torch_xla/csrc/ops/index_ops.h"
+#include "torch_xla/csrc/pooling.h"
+#include "torch_xla/csrc/tensor_impl.h"
+#include "torch_xla/csrc/tensor_util.h"
+#include "torch_xla/csrc/torch_util.h"
+#include "torch_xla/csrc/version.h"
+
 namespace torch_xla {
 namespace bridge {
 namespace {
@@ -107,6 +133,7 @@ XLATensor GetOrCreateXlaTensor(const c10::optional<at::Tensor>& tensor,
 
 std::vector<at::Tensor> XlaCreateTensorList(const at::TensorList& tensors) {
   TF_VLOG(4) << "Creating Tensors List";
+  std::cout << "COUTING Creating Tensors List";
   std::vector<at::Tensor> aten_xla_tensors(tensors.size());
   std::vector<XLATensor> xla_tensors;
   // We need to separate out the defined tensors first, GetXlaTensor() doesn't
@@ -141,6 +168,8 @@ std::vector<at::Tensor> XlaCreateTensorList(const at::TensorList& tensors) {
 
 std::vector<c10::optional<at::Tensor>> XlaCreateOptTensorList(
     const std::vector<c10::optional<at::Tensor>>& tensors) {
+  TF_VLOG(4) << "Inside XlaCreateOptTensorList";
+  std::cout << "COUTING Inside XlaCreateOptTensorList" << std::endl;
   std::vector<c10::optional<at::Tensor>> opt_aten_xla_tensors(tensors.size());
   std::vector<at::Tensor> materialized_tensors;
   std::vector<bool> to_translate(tensors.size());
@@ -151,6 +180,7 @@ std::vector<c10::optional<at::Tensor>> XlaCreateOptTensorList(
       materialized_tensors.push_back(*tensor);
     }
   }
+  TF_VLOG(4) << "Calling XlaCreateTensorList from XlaCreateOptTensorList";
   auto aten_materialzied_tensors = XlaCreateTensorList(materialized_tensors);
   for (size_t i = 0, defined_pos = 0; i < tensors.size(); ++i) {
     if (to_translate[i]) {
@@ -158,6 +188,7 @@ std::vector<c10::optional<at::Tensor>> XlaCreateOptTensorList(
           std::move(aten_materialzied_tensors[defined_pos++]);
     }
   }
+  TF_VLOG(4) << "Returning from XlaCreateOptTensorList";
   return opt_aten_xla_tensors;
 }
 
