@@ -49,6 +49,11 @@ RUN if [ "${cloud_build}" = true ]; then github_branch="${release_version}" && \
 
 RUN cd /pytorch && bash xla/scripts/build_torch_wheels.sh ${python_version} ${release_version} ${torch_commit_id} ${torchvision_commit_id}
 
+# Change transformers code for fp64 bug
+COPY test/ /opt/ml/code 
+RUN pip3 install transformers 
+RUN /pytorch/xla/scripts/apply_transformer_patch.sh
+
 # Use conda environment on startup or when running scripts.
 RUN echo "conda activate pytorch" >> ~/.bashrc
 RUN echo "export TF_CPP_LOG_THREAD_ID=1" >> ~/.bashrc
