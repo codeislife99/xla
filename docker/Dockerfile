@@ -38,6 +38,8 @@ ENV TPUVM_MODE "${tpuvm}"
 # clone recursively from pytorch/xla if building docker image with
 # cloud build. Otherwise, just use local.
 # https://github.com/GoogleCloudPlatform/cloud-builders/issues/435
+
+
 COPY . /pytorch/xla
 RUN if [ "${cloud_build}" = true ]; then github_branch="${release_version}" && \
   if [ "${release_version}" = "nightly" ]; then github_branch="master"; fi && \
@@ -51,7 +53,9 @@ RUN cd /pytorch && bash xla/scripts/build_torch_wheels.sh ${python_version} ${re
 
 # Change transformers code for fp64 bug
 COPY test/ /opt/ml/code 
-RUN pip3 install transformers 
+# RUN pip3 install transformers 
+# COPY scripts/apply_transformer_patch.sh /pytorch/xla/scripts/apply_transformer_patch.sh
+RUN ["chmod", "+x", "/pytorch/xla/scripts/apply_transformer_patch.sh"]
 RUN /pytorch/xla/scripts/apply_transformer_patch.sh
 
 # Use conda environment on startup or when running scripts.

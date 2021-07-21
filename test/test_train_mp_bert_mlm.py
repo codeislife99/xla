@@ -210,6 +210,7 @@ if __name__ == "__main__":
 
     if xla_enabled: 
         dataset_path = "/pytorch/xla/data/clean.txt"
+        os.system("wget https://raw.githubusercontent.com/jamescalam/transformers/main/data/text/meditations/clean.txt && mkdir /pytorch/xla/data  && mv clean.txt /pytorch/xla/data/clean.txt")
     else:
         dataset_path = "data/clean.txt"
 

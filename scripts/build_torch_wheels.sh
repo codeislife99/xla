@@ -175,6 +175,7 @@ function install_and_setup_conda() {
   /usr/bin/yes | pip install lark-parser
   /usr/bin/yes | pip install cloud-tpu-client
   /usr/bin/yes | pip install tensorboardX
+  /usr/bin/yes | pip install transformers 
 }
 
 function build_and_install_torch() {
